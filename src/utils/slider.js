@@ -1,0 +1,382 @@
+import { getArticleMediaInfo } from 'api'
+// import { buildWikipediaUrl } from 'utils'
+
+// internal state of the slider component
+let current = 0
+let dir = ''
+let lang
+let gallery
+let parentContainer
+let nextStory
+let learnMoreLink
+
+const clientWidth = window.innerWidth
+const prefixClassname = 'wp-gallery-fullscreen-slider'
+
+const renderImageSlider = (images = [], selectedImage = '', givenLang, givenDir, container) => {
+  const imageListHtml = images.map(() => `
+    <div class="${prefixClassname}-item">
+        <div class="${prefixClassname}-item-loading">
+            <div class="${prefixClassname}-item-loading-spinner">
+                <div class="${prefixClassname}-item-loading-spinner-animation">
+                    <div class="${prefixClassname}-item-loading-spinner-animation-bounce"></div>
+                </div>
+            </div>
+            <div class="${prefixClassname}-item-loading-text">gallery-loading-still</div>
+        </div>
+        <div class="${prefixClassname}-item-loading-error">
+          <div class="${prefixClassname}-item-loading-error-text">gallery-loading-error</div>
+          <div class="${prefixClassname}-item-loading-error-refresh">gallery-loading-error-refresh</div>
+        </div>
+    </div>
+    `.trim()
+  ).join('')
+
+  images.some((image, index) => {
+    if (image.thumb === selectedImage) {
+      current = index
+      return true
+    }
+    return false
+  })
+  dir = givenDir
+  lang = givenLang
+  gallery = images
+  parentContainer = container
+
+  return `
+    <div class="${prefixClassname}" style="${dir === 'ltr' ? 'margin-left' : 'margin-right'}:-${current * clientWidth}px">
+      <div class="${prefixClassname}-button previous"></div>
+      <div class="${prefixClassname}-button next"></div>
+      ${imageListHtml}
+    </div>
+    `.trim()
+}
+
+const renderImageInfo = (mediaInfo, image, lang) => {
+  const getImageDescription = () => {
+    // description list order
+    // (1) commons caption - Not found
+    // (2) commons description
+    // (3) media-list caption
+    if (mediaInfo.description) {
+      return mediaInfo.description
+    } else if (image.caption) {
+      return image.caption
+    } else {
+      return ''
+    }
+  }
+
+  const getLicenseInfo = (license) => {
+    const licenseTypes = ['CC', 'BY', 'SA', 'Fair', 'Public']
+    let licenses = ''
+    licenseTypes.forEach(type => {
+      if (license && license.indexOf(type) !== -1) {
+        licenses += `<div class="${prefixClassname}-item-attribution-info-${type.toLowerCase()}"></div>`
+      }
+    })
+    return licenses
+  }
+
+  const author = null
+  // const link = mediaInfo.filePage
+  // console.log('slider.js - link....', link)
+  // console.log('slider.js - renderImageInfo - learnMoreLink....', learnMoreLink)
+  const description = getImageDescription()
+
+  const isCaptionExpandable = () => {
+    if (clientWidth < 400 && description.length > 128) {
+      return true
+    } else if (clientWidth > 400 && description.length > 142) {
+      return true
+    } else {
+      return false
+    }
+  }
+
+  // @todo consider a wrapper container for all the image info?
+  return `
+    <div class="${prefixClassname}-item-caption">
+      ${isCaptionExpandable() ? `<div class="${prefixClassname}-item-caption-expand-cue"></div>` : ''}
+      ${description ? `<div class="${prefixClassname}-item-caption-text">${description}</div>` : ''}
+    </div>
+    <div class="${prefixClassname}-item-attribution">
+      <div class="${prefixClassname}-item-attribution-info">
+        ${getLicenseInfo(mediaInfo.license)}
+        ${author ? `<div class="${prefixClassname}-item-attribution-info-author">${author}</div>` : ''}
+      </div>
+      ${learnMoreLink ? `<div class="${prefixClassname}-item-attribution-more-info">
+        <a href="${learnMoreLink}" class="${prefixClassname}-item-attribution-more-info-link" target="_blank">Learn more</a>
+      </div>` : ''}
+    </div>
+    `.trim()
+}
+
+const bindImageEvent = (container, refresh = false) => {
+  const imageElement = container.querySelector('img')
+  const loading = container.querySelector(`.${prefixClassname}-item-loading`)
+  const errorElement = container.querySelector(`.${prefixClassname}-item-loading-error`)
+
+  if (refresh) {
+    const slider = parentContainer.querySelector(`.${prefixClassname}`)
+    const items = slider.querySelectorAll(`.${prefixClassname}-item`)
+
+    items.forEach(item => {
+      const image = item.querySelector('img')
+      const caption = item.querySelector(`.${prefixClassname}-item-caption`)
+      const attribution = item.querySelector(`.${prefixClassname}-item-attribution`)
+      if (image) {
+        item.removeChild(image)
+      }
+      if (caption) {
+        item.removeChild(caption)
+      }
+      if (attribution) {
+        item.removeChild(attribution)
+      }
+    })
+
+    // eslint-disable-next-line no-use-before-define
+    renderNext(0, true)
+    loading.style.visibility = 'visible'
+    errorElement.style.visibility = 'hidden'
+  }
+
+  if (imageElement.complete) {
+    loading.style.visibility = 'hidden'
+    errorElement.style.visibility = 'hidden'
+    imageElement.style.visibility = 'visible'
+  } else {
+    const textElement = container.querySelector(`.${prefixClassname}-item-loading-text`)
+    const timeoutId = setTimeout(() => {
+      textElement.style.visibility = 'visible'
+    }, 5000)
+
+    imageElement.addEventListener('load', () => {
+      loading.style.visibility = 'hidden'
+      errorElement.style.visibility = 'hidden'
+      textElement.style.visibility = 'hidden'
+      clearTimeout(timeoutId)
+    })
+
+    imageElement.addEventListener('error', () => {
+      const refreshElement = container.querySelector(`.${prefixClassname}-item-loading-error-refresh`)
+      loading.style.visibility = 'hidden'
+      imageElement.style.visibility = 'hidden'
+
+      if (!window.navigator.onLine) {
+        const errorElementText = container.querySelector(`.${prefixClassname}-item-loading-error-text`)
+        errorElementText.innerText = 'gallery-loading-error-offline'
+        errorElement.classList.add('offline')
+      }
+      errorElement.style.visibility = 'visible'
+      clearTimeout(timeoutId)
+
+      refreshElement.addEventListener('click', () => {
+        bindImageEvent(container, true)
+      })
+    })
+  }
+}
+
+const handleCaptionExpansion = (item, forceClose = false) => {
+  const captionText = item.querySelector(`.${prefixClassname}-item-caption-text`)
+  const expandCue = item.querySelector(`.${prefixClassname}-item-caption-expand-cue`)
+  const expanded = item.querySelector('.expanded')
+  // eslint-disable-next-line no-mixed-operators
+  if (expandCue && expanded || forceClose && expandCue) {
+    expandCue.classList.remove('expanded')
+    captionText.style.maxHeight = '80px'
+  } else if (expandCue) {
+    expandCue.classList.add('expanded')
+    captionText.style.maxHeight = '241px'
+  }
+}
+
+const showImageAndInfo = (index, refreshImage = false) => {
+  const slider = parentContainer.querySelector(`.${prefixClassname}`)
+  const items = slider.querySelectorAll(`.${prefixClassname}-item`)
+  const item = items[index]
+
+  if (item) {
+    const [mediaInfoPromise] = getArticleMediaInfo(lang, gallery[index].title, gallery[index].fromCommon)
+
+    mediaInfoPromise.then(mediaInfo => {
+      // console.log('mediaInfo...', mediaInfo)
+      const imageElement = item.querySelector('img')
+      const captionElement = item.querySelector(`.${prefixClassname}-item-caption`)
+
+      item.insertAdjacentHTML('beforeend', `<div class="${prefixClassname}-progress">${index + 1} of ${gallery.length}</div>    `)
+
+      if (!imageElement) {
+        if (!refreshImage) {
+          item.insertAdjacentHTML('beforeend', `<img src="${mediaInfo.bestFitImageUrl}"/>`)
+        } else {
+          item.insertAdjacentHTML('beforeend', `<img src="${mediaInfo.bestFitImageUrl}?timestamp=${Date.now()}"/>`)
+        }
+        bindImageEvent(item)
+      }
+
+      if (!captionElement) {
+        item.insertAdjacentHTML(
+          'beforeend',
+          renderImageInfo(mediaInfo, gallery[index], lang
+          ))
+
+        const insertedCaption = item.querySelector(`.${prefixClassname}-item-caption`)
+
+        insertedCaption.addEventListener('click', () => {
+          handleCaptionExpansion(item)
+        })
+      }
+    })
+  }
+}
+
+const renderNext = (offset = 1, refresh = false) => {
+  const slider = parentContainer.querySelector(`.${prefixClassname}`)
+  const items = slider.querySelectorAll(`.${prefixClassname}-item`)
+  const nextButton = slider.querySelector('.next')
+  const previousButton = slider.querySelector('.previous')
+  const next = current + offset
+  const previous = current - offset
+  const item = items[next]
+  // console.log('slider.js - renderNext - items...', items)
+  // console.log('slider.js - renderNext - item...', item)
+  // console.log('slider.js - renderNext - previous...', previous)
+  // console.log('slider.js - renderNext - current...', current)
+  // console.log('slider.js - renderNext - next...', next)
+
+  if (item) {
+    handleCaptionExpansion(items[current], true)
+    current += offset
+    nextButton.style.opacity = current === items.length - 1 ? '0.5' : '1'
+    previousButton.style.opacity = current === 0 ? '0.5' : '1'
+
+    // render image attribution element - current, next, previous
+    showImageAndInfo(current, refresh)
+    showImageAndInfo(current + 1, refresh)
+    showImageAndInfo(current - 1, refresh)
+  } else {
+    console.log('slider.js - renderNext -  last image - nextStory...', nextStory)
+    nextStory(next > previous ? 1 : -1)
+  }
+
+  slider.style[dir === 'ltr' ? 'marginLeft' : 'marginRight'] = -clientWidth * current + 'px'
+}
+
+const renderPrevious = () => {
+  renderNext(-1)
+}
+
+const applyGestureEvent = () => {
+  const temp = {
+    screenX: null,
+    originalMarginLeft: null,
+    currentMarginLeft: null,
+    originalTransition: null,
+    durationStart: null
+  }
+
+  const container = parentContainer.querySelector(`.${prefixClassname}`)
+  const marginLR = dir === 'ltr' ? 'marginLeft' : 'marginRight'
+  const captionText = `${prefixClassname}-item-caption-text`
+  const items = container.querySelectorAll(`.${prefixClassname}-item`)
+
+  container.addEventListener('touchstart', e => {
+    if (e.target.className === captionText &&
+        items[current].querySelector(`.${prefixClassname}-item-caption-expand-cue`)) {
+      return
+    }
+
+    const containerStyle = window.getComputedStyle(container)
+    temp.durationStart = Date.now()
+    temp.screenX = e.touches[0].clientX
+    temp.originalMarginLeft =
+                +containerStyle[marginLR].slice(0, -2)
+    temp.currentMarginLeft =
+                +containerStyle[marginLR].slice(0, -2)
+    temp.originalTransition = containerStyle.transition
+    container.style.transition = 'unset'
+  })
+  container.addEventListener('touchmove', e => {
+    if (e.target.className === captionText &&
+        items[current].querySelector(`.${prefixClassname}-item-caption-expand-cue`)) {
+      return
+    }
+    const clientX = e.touches[0].clientX
+    const offset = clientX - temp.screenX
+    temp.currentMarginLeft = temp.originalMarginLeft + offset * (dir === 'ltr' ? 1 : -1)
+    // console.log('applyGestureEvent - gallery[current]...', gallery[current])
+    // console.log('applyGestureEvent - offset...', offset)
+    container.style[marginLR] = temp.currentMarginLeft + 'px'
+    if (Math.abs(offset) < 20) {
+      container.style.opacity = 0.7
+    }
+    if (Math.abs(offset) > 40) {
+      container.style.opacity = 0.5
+    }
+    if (Math.abs(offset) > 60) {
+      container.style.opacity = 0.3
+    }
+    e.preventDefault()
+  })
+  container.addEventListener('touchend', e => {
+    if (e.target.className === captionText &&
+        items[current].querySelector(`.${prefixClassname}-item-caption-expand-cue`)) {
+      return
+    }
+    container.style.transition = temp.originalTransition
+    const diff = temp.originalMarginLeft - temp.currentMarginLeft
+    const duration = Date.now() - temp.durationStart
+    if (Math.abs(diff / clientWidth) > 0.4 ||
+        (duration <= 300 && Math.abs(diff) > 5)
+    ) {
+      // renderNext(diff > 0 ? 1 : -1)
+      nextStory(diff > 0 ? 1 : -1)
+    } else {
+      container.style[marginLR] = -clientWidth * current + 'px'
+      container.style.opacity = 1
+    }
+  })
+}
+
+const toggleFocusMode = () => {
+  const gallery = parentContainer.querySelector('.wp-gallery-fullscreen')
+  gallery.classList.toggle('wp-gallery-fullscreen-focus-mode')
+}
+
+const onShowFn = (handleNext, url) => {
+  const sliderContainer = parentContainer.querySelector(`.${prefixClassname}`)
+  const items = sliderContainer.querySelectorAll(`.${prefixClassname}-item`)
+  const nextButton = sliderContainer.querySelector('.next')
+  const previousButton = sliderContainer.querySelector('.previous')
+
+  current = 0
+  renderNext(0)
+  nextStory = handleNext
+  learnMoreLink = url
+  applyGestureEvent()
+
+  sliderContainer.addEventListener('click', (e) => {
+    if (e.target.className === `${prefixClassname}-item` ||
+        e.target.tagName === 'IMG') {
+      toggleFocusMode()
+    }
+  })
+
+  if (items.length === 1) {
+    previousButton.style.visibility = 'hidden'
+    nextButton.style.visibility = 'hidden'
+  } else {
+    nextButton.addEventListener('click', () => {
+      renderNext()
+    })
+    previousButton.addEventListener('click', () => {
+      renderPrevious()
+    })
+  }
+}
+
+export { renderImageSlider, onShowFn }
